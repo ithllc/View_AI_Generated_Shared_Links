@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+playwright
+beautifulsoup4
+markdownify
+click
+rich
+pydantic
+aiohttp
+python-dotenv
