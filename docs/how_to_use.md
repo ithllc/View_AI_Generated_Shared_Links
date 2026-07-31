@@ -107,6 +107,34 @@ The `warm` command opens a **headed** browser with the persistent profile, waits
 
   Then open any VNC viewer on Windows and connect to `localhost:5900` (WSL2 shares `localhost` with Windows). Solve the challenge in the window, then press Enter in the terminal.
 
+### Interactive capture — the most reliable way past a CAPTCHA (recommended)
+
+`warm` only saves cookies for later; **interactive capture** goes one step further: it opens the page in a real browser, lets *you* solve any CAPTCHA and load the full conversation, and then captures **that live tab** directly. Because a human drives a genuine session, providers like Google serve the real content instead of a bot challenge — there is no automated fingerprint to distrust.
+
+```bash
+python main.py fetch --interactive "https://share.google/aimode/xxxx"
+```
+
+This bypasses the cache (always captures fresh) and needs a display. As a desktop-session user the window just appears. Running headless / as `root`, use the bundled Xvfb + VNC helper:
+
+```bash
+# one-time: sudo apt-get install -y xvfb x11vnc fluxbox
+./scripts/interactive_session.sh capture "https://share.google/aimode/xxxx"
+# (./scripts/interactive_session.sh warm "<url>" does the warm flow instead)
+```
+
+Connect a VNC viewer to `localhost:5900`, solve the CAPTCHA / load the conversation, then press Enter in the terminal — the live page is saved as Markdown.
+
+### Ingesting an already-saved page (no automation at all)
+
+The most bulletproof option: open the link in *any* browser, save the fully-rendered page (`Ctrl+S` → "Webpage, HTML Only", or copy the DOM), and convert that file — nothing automated ever touches the provider.
+
+```bash
+python main.py ingest ./saved_page.html --url "https://share.google/aimode/xxxx"
+```
+
+`--url` is optional; it sets the provider and metadata. Without it the file is stored under the `generic` provider.
+
 ## 3. Agent Usage (Local API)
 
 If you are writing a separate agent code that needs programmable access, spin up the server:

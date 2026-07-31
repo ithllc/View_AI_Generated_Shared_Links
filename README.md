@@ -5,6 +5,7 @@ This tool allows users and AI agents to fetch content from shared AI conversatio
 ## Features
 - **Headless Browser Scraping:** Uses `Playwright` to navigate and fully render JavaScript-heavy AI shared links.
 - **Anti-Bot Hardening:** Prefers a real Chrome install and applies `playwright-stealth` (neutralizing `navigator.webdriver`, WebGL/plugin tells, and UA/client-hint mismatches) to reduce provider bot-detection. Supports optional headed mode and a persistent profile (`USER_DATA_DIR`) for challenge-prone surfaces.
+- **Three Capture Modes:** Automated headless `fetch`; **interactive capture** (`fetch --interactive`) that opens a real browser so you solve any CAPTCHA by hand and captures the live tab — the reliable path past Google's bot detection; and **ingest** of an already-saved HTML page (zero automation). Includes an Xvfb+VNC helper for headless/root/WSL environments.
 - **Human-like Lazy Loading:** Automatically performs dynamic interval scrolling and targets inner containers to ensure all lazy-loaded conversational nodes render before capture.
 - **Multi-Tier Screenshot Engine:** Tries full-page stitching, degrades to specific `main` node locators, and safely falls back to viewport snapshots to guarantee capturing success without timing out.
 - **Hybrid OCR LLM Extraction (Optional):** Employs a local Vision LLM via the V1 API to read the screenshots directly, gracefully falling back to DOM parsing if the visual read fails or times out.
