@@ -1,4 +1,5 @@
 import re
+import asyncio
 import base64
 import aiohttp
 from urllib.parse import urlparse
@@ -50,7 +51,23 @@ async def _capture_screenshot(page) -> bytes:
     # hang the same way the full-page stitch did.
     return await page.screenshot(full_page=False, type="jpeg", quality=80, timeout=10000, animations="disabled")
 
-async def _new_context(p):
+def _make_playwright():
+    """Return ``(playwright_context_manager, stealth_or_None)``.
+
+    When stealth is enabled we drive Playwright through
+    ``Stealth().use_async(...)`` so that ``launch()`` + ``new_context()`` are
+    auto-hooked. NOTE: that auto-hook does NOT cover
+    ``launch_persistent_context`` -- persistent contexts must have stealth
+    applied explicitly (see ``_new_context``), otherwise ``navigator.webdriver``
+    et al. leak through. The returned stealth object is used for exactly that.
+    """
+    if STEALTH_ENABLED:
+        stealth = Stealth()
+        return stealth.use_async(async_playwright()), stealth
+    return async_playwright(), None
+
+
+async def _new_context(p, stealth=None, headless=None):
     """Create a browsing context tuned to minimise bot-detection.
 
     Prefers a real Chrome install (``channel="chrome"``) over bundled Chromium
@@ -61,20 +78,35 @@ async def _new_context(p):
     user. Returns ``(context, aclose)`` where ``aclose`` is an awaitable that
     tears the browser/context down.
 
+    ``stealth`` is the object returned by :func:`_make_playwright`. For
+    persistent contexts (which the ``use_async`` hook misses) we apply it
+    explicitly so the anti-detection patches actually take effect.
+
     Note: we intentionally do NOT spoof a hardcoded User-Agent. Real Chrome (in
     modern "new" headless) sends an honest, self-consistent UA + client hints;
     playwright-stealth aligns the JS-visible surface. A mismatched fake UA is a
     stronger bot signal than the truth.
     """
+    if headless is None:
+        headless = BROWSER_HEADLESS
     channels_to_try = [BROWSER_CHANNEL, None] if BROWSER_CHANNEL else [None]
     last_err = None
     for channel in channels_to_try:
-        kwargs = {"headless": BROWSER_HEADLESS}
+        kwargs = {"headless": headless}
         if channel:
             kwargs["channel"] = channel
+        # Headed real Chrome refuses to run as root without --no-sandbox (common
+        # in containers / WSL, where interactive `warm` sessions run). The
+        # primary headless fetch path runs fine as root without it, so we keep
+        # the flag off there to preserve the cleanest possible fingerprint.
+        if channel and not headless:
+            kwargs["args"] = ["--no-sandbox"]
         try:
             if USER_DATA_DIR:
                 context = await p.chromium.launch_persistent_context(USER_DATA_DIR, **kwargs)
+                # use_async does NOT hook persistent contexts -- apply explicitly.
+                if stealth is not None:
+                    await stealth.apply_stealth_async(context)
 
                 async def _aclose():
                     await context.close()
@@ -108,10 +140,10 @@ async def fetch_and_parse_url(url: str) -> dict:
     # Apply stealth to every context/page created within this block (patches
     # navigator.webdriver, plugins, window.chrome, WebGL vendor, UA/client-hint
     # consistency, ...). If disabled, use a plain Playwright context.
-    pw_cm = Stealth().use_async(async_playwright()) if STEALTH_ENABLED else async_playwright()
+    pw_cm, stealth = _make_playwright()
 
     async with pw_cm as p:
-        context, cleanup = await _new_context(p)
+        context, cleanup = await _new_context(p, stealth=stealth)
         page = await context.new_page()
 
         try:
@@ -253,3 +285,45 @@ async def fetch_and_parse_url(url: str) -> dict:
         "title": title.strip() if title else "Untitled",
         "markdown_content": markdown_text
     }
+
+
+async def warm_profile(url: str | None = None):
+    """Open a *headed*, real-Chrome browser using the persistent profile so a
+    human can solve a CAPTCHA / accept a consent dialog by hand. When the window
+    is closed, the resulting cookies + consent state are persisted in
+    ``USER_DATA_DIR``, so subsequent (even headless) ``fetch`` runs using the
+    same profile are treated like a returning, trusted user.
+
+    Requires ``USER_DATA_DIR`` to be set -- warming an ephemeral profile is
+    pointless because the state would be discarded immediately. Requires a
+    display: under WSLg / a desktop the window appears normally; on a headless
+    server run it under Xvfb + a VNC viewer so you can actually interact.
+    """
+    if not USER_DATA_DIR:
+        raise Exception(
+            "USER_DATA_DIR is not set. Warming only makes sense with a persistent "
+            "profile. Set USER_DATA_DIR in your .env (e.g. USER_DATA_DIR=\"./.profile\") "
+            "and retry."
+        )
+
+    pw_cm, stealth = _make_playwright()
+    async with pw_cm as p:
+        # Force headed regardless of BROWSER_HEADLESS -- the whole point is manual
+        # interaction. Reuse the persistent-profile + channel-fallback logic.
+        context, cleanup = await _new_context(p, stealth=stealth, headless=False)
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        if url:
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as e:
+                print(f"Warning: initial navigation had an issue ({e}). You can still navigate manually in the window.")
+
+        # Block on human interaction without freezing the event loop.
+        await asyncio.to_thread(
+            input,
+            "\n>>> A browser window should now be open.\n"
+            ">>> Solve any CAPTCHA / accept any consent dialog, then press Enter HERE to save the session and close.\n"
+        )
+
+        await cleanup()

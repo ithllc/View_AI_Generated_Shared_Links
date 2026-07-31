@@ -19,3 +19,7 @@ env/
 # App Specific Data
 saved_links/
 playwright-cache/
+
+# Persistent browser profile (warmed sessions / cookies)
+.profile/
+*.profile/
