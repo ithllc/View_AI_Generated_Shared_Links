@@ -19,6 +19,8 @@ This tool allows users and AI agents to fetch content from shared AI conversatio
 ## Prerequisites
 - Python 3.10+
 - Playwright browsers installed
+- (Recommended) A real Google Chrome install — the anti-bot hardening prefers `channel="chrome"` and falls back to bundled Chromium automatically
+- (Optional) `xvfb x11vnc fluxbox` — only needed to run interactive capture / `warm` on a headless server or as root under WSL (see [how_to_use](./docs/how_to_use.md))
 
 ## Installation
 
@@ -45,6 +47,13 @@ This tool allows users and AI agents to fetch content from shared AI conversatio
    LOCAL_LLM_BASE_URL="http://192.168.1.168:4000/v1"
    LOCAL_LLM_MODEL="gemma-4-26b"
    ```
+
+5. (Optional) For interactive capture / `warm` on a headless server or as root under WSL, install the virtual-display helper deps:
+   ```bash
+   sudo apt-get install -y xvfb x11vnc fluxbox
+   ```
+
+See [docs/how_to_use.md](./docs/how_to_use.md) for the browser, anti-bot, and resource-guard `.env` knobs and the three capture modes (`fetch`, `fetch --interactive`, `ingest`).
 
 ## Documentation
 Please view the [docs folder](./docs/how_to_use.md) for how-to guides and architecture definitions.
