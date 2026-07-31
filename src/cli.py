@@ -4,6 +4,7 @@ from rich.console import Console
 from src.fetcher import fetch_and_parse_url, identify_provider, warm_profile
 from src.storage import save_markdown, list_saved_links, check_existing_url, cleanup_old_files
 from src.config import USER_DATA_DIR
+from src.guard import kill_stragglers
 
 console = Console()
 
@@ -74,6 +75,19 @@ def warm(url: str):
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
 
     asyncio.run(run())
+
+@cli.command()
+def cleanup():
+    """Kill orphaned automation-browser processes left by a crashed/killed run.
+
+    Only targets Chrome processes that are automation-controlled AND tied to
+    this app's profiles -- never your normal browser.
+    """
+    killed = kill_stragglers(extra_profile_dir=USER_DATA_DIR)
+    if killed:
+        console.print(f"[bold green]Reaped[/bold green] {killed} straggler browser process(es).")
+    else:
+        console.print("No straggler browser processes found.")
 
 @cli.command()
 def list():

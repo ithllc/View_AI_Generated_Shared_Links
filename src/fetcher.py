@@ -14,7 +14,29 @@ from src.config import (
     BROWSER_HEADLESS,
     USER_DATA_DIR,
     STEALTH_ENABLED,
+    LOW_MEMORY,
+    FETCH_TIMEOUT_SEC,
+    MEMORY_LIMIT_MB,
+    GUARD_POLL_SEC,
 )
+from src.guard import run_guarded, kill_own_browsers
+
+# Low-memory Chrome flags: cap renderer processes/caches, drop GPU + background
+# work. Keeps a headless fetch to a few hundred MB instead of gigabytes.
+_LOW_MEMORY_ARGS = [
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-features=site-per-process,TranslateUI",
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=512",
+    "--disk-cache-size=1048576",
+    "--no-first-run",
+    "--no-default-browser-check",
+]
 
 def identify_provider(url: str) -> str:
     domain = urlparse(url).netloc.lower()
@@ -95,12 +117,15 @@ async def _new_context(p, stealth=None, headless=None):
         kwargs = {"headless": headless}
         if channel:
             kwargs["channel"] = channel
+        args = list(_LOW_MEMORY_ARGS) if LOW_MEMORY else []
         # Headed real Chrome refuses to run as root without --no-sandbox (common
         # in containers / WSL, where interactive `warm` sessions run). The
         # primary headless fetch path runs fine as root without it, so we keep
         # the flag off there to preserve the cleanest possible fingerprint.
         if channel and not headless:
-            kwargs["args"] = ["--no-sandbox"]
+            args.append("--no-sandbox")
+        if args:
+            kwargs["args"] = args
         try:
             if USER_DATA_DIR:
                 context = await p.chromium.launch_persistent_context(USER_DATA_DIR, **kwargs)
@@ -134,9 +159,13 @@ async def _new_context(p, stealth=None, headless=None):
     raise Exception(f"Failed to launch any browser: {last_err}")
 
 
-async def fetch_and_parse_url(url: str) -> dict:
-    provider = identify_provider(url)
+async def _browser_capture(url: str):
+    """Drive the browser and return ``(html_content, title, base64_image)``.
 
+    Wrapped by :func:`run_guarded` in :func:`fetch_and_parse_url` so a hung page
+    or a runaway Chrome tree is killed by the watchdog rather than blocking
+    forever / eating RAM. The browser is always torn down via the finally block.
+    """
     # Apply stealth to every context/page created within this block (patches
     # navigator.webdriver, plugins, window.chrome, WebGL vendor, UA/client-hint
     # consistency, ...). If disabled, use a plain Playwright context.
@@ -144,9 +173,8 @@ async def fetch_and_parse_url(url: str) -> dict:
 
     async with pw_cm as p:
         context, cleanup = await _new_context(p, stealth=stealth)
-        page = await context.new_page()
-
         try:
+            page = await context.new_page()
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await page.wait_for_timeout(3000)
 
@@ -200,25 +228,44 @@ async def fetch_and_parse_url(url: str) -> dict:
             html_content = await page.content()
             title = await page.title()
 
-        except Exception as e:
-            await cleanup()
-            raise Exception(f"Failed to load URL: {str(e)}")
+            # Take a screenshot for the optional OCR/Vision path. This is strictly
+            # best-effort: the screenshot is ONLY consumed by the LLM vision strategy
+            # below, while DOM parsing relies solely on the HTML already captured
+            # above. A screenshot failure must therefore never abort the fetch --
+            # otherwise pages that are un-screenshottable (e.g. Google's infinitely
+            # resizing AI-mode layout) would fail entirely instead of degrading to
+            # DOM extraction.
+            base64_image = None
+            try:
+                screenshot_bytes = await _capture_screenshot(page)
+                base64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
+            except Exception as screenshot_err:
+                print(f"Warning: All screenshot tiers failed. Skipping OCR and using DOM parsing. ({screenshot_err})")
 
-        # Take a screenshot for the optional OCR/Vision path. This is strictly
-        # best-effort: the screenshot is ONLY consumed by the LLM vision strategy
-        # below, while DOM parsing relies solely on the HTML already captured
-        # above. A screenshot failure must therefore never abort the fetch --
-        # otherwise pages that are un-screenshottable (e.g. Google's infinitely
-        # resizing AI-mode layout) would fail entirely instead of degrading to
-        # DOM extraction.
-        base64_image = None
-        try:
-            screenshot_bytes = await _capture_screenshot(page)
-            base64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
-        except Exception as screenshot_err:
-            print(f"Warning: All screenshot tiers failed. Skipping OCR and using DOM parsing. ({screenshot_err})")
+            return html_content, title, base64_image
+        finally:
+            # Always release the browser, even on cancellation from the watchdog.
+            try:
+                await cleanup()
+            except Exception:
+                pass
 
-        await cleanup()
+
+async def fetch_and_parse_url(url: str) -> dict:
+    provider = identify_provider(url)
+
+    # Run the browser work under the resource watchdog: a hang (wall-clock) or a
+    # runaway Chrome tree (memory) is killed and reported, never left to block.
+    try:
+        html_content, title, base64_image = await run_guarded(
+            _browser_capture(url),
+            timeout_sec=FETCH_TIMEOUT_SEC,
+            mem_limit_mb=MEMORY_LIMIT_MB,
+            poll_sec=GUARD_POLL_SEC,
+        )
+    except Exception as e:
+        kill_own_browsers()  # belt-and-suspenders: reap anything still lingering
+        raise Exception(f"Failed to load URL: {str(e)}")
 
     markdown_text = None
     

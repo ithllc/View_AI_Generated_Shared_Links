@@ -35,6 +35,32 @@ USER_DATA_DIR="/path/to/profile"
 STEALTH_ENABLED="true"
 ```
 
+## 1c. Resource Guards (hang & memory protection)
+
+A fetch drives a real browser, so it is guarded against the two ways that can go wrong — hanging forever, and eating all your RAM. A watchdog samples the browser process tree while it runs and **kills it** if either ceiling is crossed, failing fast with a clear message instead of blocking your machine.
+
+```ini
+# Hard wall-clock ceiling for one fetch. If the browser hangs, it is killed. (s)
+FETCH_TIMEOUT_SEC="90"
+
+# Hard memory ceiling for the whole Chrome process tree. If exceeded, the tree
+# is killed and the fetch aborts. A normal headless fetch uses a few hundred
+# MB, well under this. (MB)
+MEMORY_LIMIT_MB="1536"
+
+# Launch Chrome with low-memory flags (fewer renderer processes, capped caches,
+# no GPU/extensions/background work). Default true.
+LOW_MEMORY="true"
+```
+
+If a run is ever force-killed (Ctrl-C, OOM, crash) and leaves an orphaned browser behind, reap it with:
+
+```bash
+python main.py cleanup
+```
+
+This only targets automation-controlled Chrome tied to this app's profiles — it never touches your normal browser.
+
 > **Note on Google Search / AI Mode:** these defaults neutralise the JavaScript-level bot tells (verified: `navigator.webdriver=false`, honest UA + client hints, real WebGL renderer), but they cannot *guarantee* bypass. IP reputation and the TLS/HTTP2 fingerprint remain, and this surface is aggressively defended. If challenges persist, run headed (`BROWSER_HEADLESS=false`) with a persistent `USER_DATA_DIR`, and/or use a residential egress IP. Programmatic CAPTCHA-solving is intentionally **not** implemented. See [the incident report](./troubleshooting_playwright_timeout.md#follow-up-google-bot-detection-on-sharegoogle-links) for the full analysis.
 
 ## 2. CLI Usage
