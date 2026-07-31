@@ -3,9 +3,17 @@ import base64
 import aiohttp
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
 from bs4 import BeautifulSoup
 import markdownify
-from src.config import LOCAL_LLM_BASE_URL, LOCAL_LLM_MODEL
+from src.config import (
+    LOCAL_LLM_BASE_URL,
+    LOCAL_LLM_MODEL,
+    BROWSER_CHANNEL,
+    BROWSER_HEADLESS,
+    USER_DATA_DIR,
+    STEALTH_ENABLED,
+)
 
 def identify_provider(url: str) -> str:
     domain = urlparse(url).netloc.lower()
@@ -42,13 +50,70 @@ async def _capture_screenshot(page) -> bytes:
     # hang the same way the full-page stitch did.
     return await page.screenshot(full_page=False, type="jpeg", quality=80, timeout=10000, animations="disabled")
 
+async def _new_context(p):
+    """Create a browsing context tuned to minimise bot-detection.
+
+    Prefers a real Chrome install (``channel="chrome"``) over bundled Chromium
+    because a genuine Chrome build leaks far fewer headless tells (real WebGL
+    renderer, consistent version/client-hints). Falls back to bundled Chromium
+    if the channel is unavailable. When ``USER_DATA_DIR`` is set, a persistent
+    profile is used so cookies/consent state carry across runs like a returning
+    user. Returns ``(context, aclose)`` where ``aclose`` is an awaitable that
+    tears the browser/context down.
+
+    Note: we intentionally do NOT spoof a hardcoded User-Agent. Real Chrome (in
+    modern "new" headless) sends an honest, self-consistent UA + client hints;
+    playwright-stealth aligns the JS-visible surface. A mismatched fake UA is a
+    stronger bot signal than the truth.
+    """
+    channels_to_try = [BROWSER_CHANNEL, None] if BROWSER_CHANNEL else [None]
+    last_err = None
+    for channel in channels_to_try:
+        kwargs = {"headless": BROWSER_HEADLESS}
+        if channel:
+            kwargs["channel"] = channel
+        try:
+            if USER_DATA_DIR:
+                context = await p.chromium.launch_persistent_context(USER_DATA_DIR, **kwargs)
+
+                async def _aclose():
+                    await context.close()
+
+                cleanup = _aclose
+            else:
+                browser = await p.chromium.launch(**kwargs)
+                context = await browser.new_context()
+
+                async def _aclose():
+                    await browser.close()
+
+                cleanup = _aclose
+
+            if channel is None and BROWSER_CHANNEL:
+                print("Warning: real Chrome channel unavailable; using bundled Chromium (more detectable).")
+            return context, cleanup
+        except Exception as e:
+            last_err = e
+            if channel:
+                first_line = str(e).splitlines()[0] if str(e) else repr(e)
+                print(f"Warning: browser channel '{channel}' failed to launch, trying bundled Chromium... ({first_line})")
+            continue
+
+    raise Exception(f"Failed to launch any browser: {last_err}")
+
+
 async def fetch_and_parse_url(url: str) -> dict:
     provider = identify_provider(url)
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-        
+
+    # Apply stealth to every context/page created within this block (patches
+    # navigator.webdriver, plugins, window.chrome, WebGL vendor, UA/client-hint
+    # consistency, ...). If disabled, use a plain Playwright context.
+    pw_cm = Stealth().use_async(async_playwright()) if STEALTH_ENABLED else async_playwright()
+
+    async with pw_cm as p:
+        context, cleanup = await _new_context(p)
+        page = await context.new_page()
+
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await page.wait_for_timeout(3000)
@@ -104,7 +169,7 @@ async def fetch_and_parse_url(url: str) -> dict:
             title = await page.title()
 
         except Exception as e:
-            await browser.close()
+            await cleanup()
             raise Exception(f"Failed to load URL: {str(e)}")
 
         # Take a screenshot for the optional OCR/Vision path. This is strictly
@@ -121,7 +186,7 @@ async def fetch_and_parse_url(url: str) -> dict:
         except Exception as screenshot_err:
             print(f"Warning: All screenshot tiers failed. Skipping OCR and using DOM parsing. ({screenshot_err})")
 
-        await browser.close()
+        await cleanup()
 
     markdown_text = None
     
