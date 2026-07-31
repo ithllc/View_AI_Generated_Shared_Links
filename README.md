@@ -10,6 +10,7 @@ This tool allows users and AI agents to fetch content from shared AI conversatio
 - **Hybrid OCR LLM Extraction (Optional):** Employs a local Vision LLM via the V1 API to read the screenshots directly, gracefully falling back to DOM parsing if the visual read fails or times out.
 - **Markdown Conversion**: Uses `markdownify` + `BeautifulSoup` to strip noise and save pure conversational paths to Markdown.
 - **Provider-specific Organization**: Automatically categorizes downloaded contexts into `saved_links/<provider>/`.
+- **Resource Guards:** A watchdog enforces hard wall-clock and memory ceilings on the browser, killing it (and any stragglers) if a page hangs or Chrome bloats — a fetch stays well under a couple hundred MB. Includes a `cleanup` command to reap orphaned browsers.
 - **Deduplication:** Hashing mechanism prevents identical URLs from being repeatedly processed.
 - **Automatic Weekly Cleanup**: Automatically checks and removes artifacts older than 7 days to keep disk footprints low deterministically.
 - **API & CLI Access**: Comes fully featured with a beautiful CLI (via `click` + `rich`) as well as a fast local REST API (`FastAPI`) making it effortless for other agents to consume.
