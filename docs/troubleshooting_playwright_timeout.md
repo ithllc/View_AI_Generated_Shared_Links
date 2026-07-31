@@ -53,6 +53,11 @@ The following now runs by default and closes vectors #1–#3:
 
 Verified against a fingerprint probe: `navigator.webdriver` is now `false`, the UA is honest Chrome 133 with matching client hints, plugins are non-empty, `window.chrome` is present, and the WebGL renderer reports a real GPU (`Intel Iris OpenGL Engine`) instead of SwiftShader.
 
+### Warming a trusted session
+For challenge-prone providers, `python main.py warm <url>` (or `scripts/warm_session.sh` when running headless/as root) opens a headed browser with a persistent `USER_DATA_DIR` so you can solve the CAPTCHA once by hand; later `fetch` runs reuse that trusted profile. See [How To Use](./how_to_use.md#warming-a-trusted-session-for-captcha-prone-providers).
+
+> **Implementation note:** `playwright-stealth`'s `Stealth().use_async(...)` auto-hook patches `launch()`/`new_context()` but **not** `launch_persistent_context()`. Persistent-profile contexts therefore need stealth applied explicitly (`await stealth.apply_stealth_async(context)`), otherwise `navigator.webdriver` and friends leak through on exactly the warmed sessions we most want to look human. `_new_context()` does this.
+
 ### What hardening does NOT solve
 Passive hardening lowers the risk score but cannot *guarantee* passage on Google Search / AI Mode. Vectors #4 (TLS/HTTP2 fingerprint) and #5 (IP reputation) remain, and this surface is aggressively defended. If challenges persist:
 - run **headed** with a **persistent `USER_DATA_DIR`** (clear one challenge by hand, stay trusted), and/or

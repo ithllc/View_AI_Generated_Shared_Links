@@ -57,6 +57,30 @@ To review what links your environment has collected so far:
 python main.py list
 ```
 
+### Warming a trusted session (for CAPTCHA-prone providers)
+
+When a provider (e.g. Google) keeps returning a reCAPTCHA interstitial, you can solve the challenge **once by hand** in a real browser window and reuse that trusted session for later automated fetches. This requires a persistent profile (`USER_DATA_DIR`).
+
+```bash
+# .env must contain a persistent profile dir, e.g.:
+#   USER_DATA_DIR="./.profile"
+python main.py warm "https://share.google/aimode/xxxx"
+```
+
+The `warm` command opens a **headed** browser with the persistent profile, waits for you to solve the CAPTCHA / accept consent, and — when you press Enter in the terminal — saves the resulting cookies into the profile. Subsequent `python main.py fetch <same-url>` runs reuse that profile (they can stay headless) and are far less likely to be challenged.
+
+**Display requirements — this needs a screen you can click:**
+
+- **WSLg / Linux desktop, running as your normal (session-owning) user:** a browser window appears automatically; just interact with it.
+- **Running as `root` under WSLg** (WSLg's display belongs to your normal user, so root can't attach to it) **or on a headless server:** use the bundled helper, which runs the browser inside its own virtual display exposed over VNC:
+
+  ```bash
+  # one-time: sudo apt-get install -y xvfb x11vnc fluxbox
+  USER_DATA_DIR=./.profile ./scripts/warm_session.sh "https://share.google/aimode/xxxx"
+  ```
+
+  Then open any VNC viewer on Windows and connect to `localhost:5900` (WSL2 shares `localhost` with Windows). Solve the challenge in the window, then press Enter in the terminal.
+
 ## 3. Agent Usage (Local API)
 
 If you are writing a separate agent code that needs programmable access, spin up the server:
