@@ -12,6 +12,31 @@ LOCAL_LLM_MODEL="gemma-4-26b"
 
 If these values are omitted or the connection times out, the tool gracefully falls back to classical DOM text-extraction.
 
+## 1b. Browser / Anti-Bot Configuration (Optional)
+
+To reduce the chance of provider bot-detection (e.g. Google's reCAPTCHA interstitial on `share.google` links), the browser layer is hardened by default and configurable via `.env`:
+
+```ini
+# Prefer a real Chrome install over bundled Chromium (less detectable).
+# Falls back to bundled Chromium automatically if unavailable.
+# Set empty to force bundled Chromium.
+BROWSER_CHANNEL="chrome"
+
+# Run headless (default true). Set false for a headed session so you can
+# clear the occasional CAPTCHA by hand — pair with USER_DATA_DIR below.
+BROWSER_HEADLESS="true"
+
+# Optional persistent profile dir: reuses cookies/consent across runs like a
+# returning user, which lowers bot-risk scoring. Leave unset for ephemeral.
+USER_DATA_DIR="/path/to/profile"
+
+# Apply playwright-stealth patches (navigator.webdriver, plugins, WebGL
+# vendor, UA/client-hint alignment, ...). Default true.
+STEALTH_ENABLED="true"
+```
+
+> **Note on Google Search / AI Mode:** these defaults neutralise the JavaScript-level bot tells (verified: `navigator.webdriver=false`, honest UA + client hints, real WebGL renderer), but they cannot *guarantee* bypass. IP reputation and the TLS/HTTP2 fingerprint remain, and this surface is aggressively defended. If challenges persist, run headed (`BROWSER_HEADLESS=false`) with a persistent `USER_DATA_DIR`, and/or use a residential egress IP. Programmatic CAPTCHA-solving is intentionally **not** implemented. See [the incident report](./troubleshooting_playwright_timeout.md#follow-up-google-bot-detection-on-sharegoogle-links) for the full analysis.
+
 ## 2. CLI Usage
 
 To fetch a new AI conversational link and turn it into Markdown, use the `fetch` command.
